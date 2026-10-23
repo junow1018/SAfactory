@@ -244,6 +244,7 @@ def _build_command(
     environment_params: dict[str, Any],
     model_params: dict[str, Any],
     result_root: Path,
+    data_dir: str = "",
 ) -> list[str]:
     if not agentcompass_executable.is_absolute():
         raise RuntimeError("AgentCompass CLI path must be absolute")
@@ -282,7 +283,44 @@ def _build_command(
         "--progress",
         "none",
     ]
+    if data_dir:
+        command.extend(["--data-dir", data_dir])
     return command
+
+
+def _prepare_native_data(
+    benchmark: str, harness: str, dataset: dict[str, Any], result_root: Path,
+    benchmark_params: dict[str, Any], harness_params: dict[str, Any],
+) -> str:
+    """Resolve mounted inputs and isolate mutable SciCode work by episode."""
+    data_dir = _text(dataset.get("data_dir"))
+    if not data_dir:
+        if benchmark == "scicode":
+            raise RuntimeError("SciCode requires an explicit mounted data_dir")
+        return ""
+    root = Path(data_dir)
+    if not root.is_absolute() or ".." in root.parts:
+        raise RuntimeError("data_dir must be an absolute container path")
+    if benchmark == "scicode":
+        if harness != "scicode_tool_use":
+            raise RuntimeError("Mounted SciCode data requires scicode_tool_use")
+        split_files = {
+            "validation": ("problems_dev.jsonl",),
+            "test": ("problems_test.jsonl",),
+            "all": ("problems_dev.jsonl", "problems_test.jsonl"),
+        }
+        split = benchmark_params.get("split", "all")
+        if split not in split_files:
+            raise RuntimeError(f"Unsupported SciCode split: {split}")
+        for name in (*split_files[split], "test_data.h5"):
+            if not (root / "scicode" / name).is_file():
+                raise RuntimeError(f"Missing native SciCode asset: {root / 'scicode' / name}")
+        benchmark_params["h5py_file"] = str(root / "scicode/test_data.h5")
+        # Native relative workspaces resolve under data_dir; keep mounted inputs
+        # separate from generated code and evaluator files, even in concurrent runs.
+        benchmark_params["workspace_root"] = str(result_root.resolve() / "scicode-evaluation")
+        harness_params["code_workdir"] = str(result_root.resolve() / "scicode-tools")
+    return str(root)
 
 
 def _terminate_process_group(process: subprocess.Popen[Any], grace_s: float = TERMINATION_GRACE_S) -> None:
@@ -825,6 +863,9 @@ def main() -> int:
             )
             return 0
 
+        data_dir = _prepare_native_data(
+            benchmark, harness, dataset, result_root, benchmark_params, harness_params,
+        )
         command = _build_command(
             agentcompass_executable=_agentcompass_executable(),
             benchmark=benchmark,
@@ -837,6 +878,7 @@ def main() -> int:
             environment_params=environment_params,
             model_params=model_params,
             result_root=result_root,
+            data_dir=data_dir,
         )
         timeout_s = _timeout_s(request, dataset)
         stdout_path = result_root / "agentcompass.stdout.log"

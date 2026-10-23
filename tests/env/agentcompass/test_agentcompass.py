@@ -25,6 +25,11 @@ FIXTURE_ROOT = TEST_ROOT / "fixtures"
 APPROVED_RJOB_IMAGE = (
     "registry.h.pjlab.org.cn/ailab-evobox-evobox_cpu/benches:agentcompass-02"
 )
+APPROVED_RJOB_DIGEST = (
+    "registry.h.pjlab.org.cn/ailab-evobox-evobox_cpu/benches@sha256:"
+    "61e6f2b7c3e92d51981bcfd48b159964c5a40519c5d0c6b06166a2897ed324f2"
+)
+OFFICIAL_SCICODE_URL = "http://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/agentcompass/scicode.zip"
 
 
 def _load(name: str, filename: str):
@@ -331,7 +336,7 @@ class RunnerTests(unittest.TestCase):
         ]
         self.assertEqual(
             matching_mounts,
-            [{"source": "./datasets/special_pattern_check", "target": "/app/data/special_pattern_check", "mode": "ro"}],
+            [{"source": "./env/agentcompass/datasets/special_pattern_check", "target": "/app/data/special_pattern_check", "mode": "ro"}],
         )
         self.assertEqual(public_row["benchmark_params"]["version"], "gate4")
 
@@ -931,6 +936,15 @@ class RunnerTests(unittest.TestCase):
 
         docker_start = load_agent_start_config(str(ENV_ROOT / "agentcompass_start.yaml"))
         docker_cfg = docker_start["agentcompass"]["docker"]
+        data_mount = next(
+            mount for mount in docker_cfg["volumes"]
+            if mount["target"] == "/app/data/special_pattern_check"
+        )
+        self.assertTrue(
+            (Path(data_mount["source"]) / "gate4.jsonl").samefile(
+                ENV_ROOT / "datasets/special_pattern_check/gate4.jsonl"
+            )
+        )
         expected_arg = "--add-host=host.docker.internal:127.0.0.1"
         self.assertEqual(docker_cfg["network"], "host")
         self.assertEqual(docker_cfg["extra_args"], [expected_arg])
@@ -1152,6 +1166,10 @@ class RunnerTests(unittest.TestCase):
         without_approved_values = (
             combined
             .replace(APPROVED_RJOB_IMAGE, "")
+            .replace(APPROVED_RJOB_DIGEST, "")
+            .replace(OFFICIAL_SCICODE_URL, "")
+            .replace("scicode.zip", "")
+            .replace("/mnt/shared-storage-user/<USER>/", "")
             .replace("host.docker.internal", "")
         )
         self.assertNotIn("/var/run/docker.sock", combined)
