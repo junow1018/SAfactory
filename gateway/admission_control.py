@@ -51,7 +51,11 @@ class AdmissionController:
                 self.rejected_total += 1
                 raise AdmissionRejected("gateway is draining", 503)
 
-            if self.cfg.max_steps >= 0 and binding.step_count_for(ctx.requested_model) >= self.cfg.max_steps:
+            if (
+                not ctx.is_auxiliary
+                and self.cfg.max_steps >= 0
+                and binding.step_count_for(ctx.requested_model) >= self.cfg.max_steps
+            ):
                 binding.mark_model_truncated(
                     ctx.requested_model,
                     "max_steps_reached",
@@ -89,7 +93,10 @@ class AdmissionController:
             self._per_session_inflight[ctx.session_id] = session_inflight + 1
             self._request_acquired.add(ctx.request_id)
             self.accepted_total += 1
-            llm_step_index = binding.increment_step_count(ctx.requested_model)
+            if ctx.is_auxiliary:
+                llm_step_index = binding.increment_aux_call_count(ctx.call_role)
+            else:
+                llm_step_index = binding.increment_step_count(ctx.requested_model)
             return AdmissionDecision(action="forward", llm_step_index=llm_step_index)
 
     async def release(

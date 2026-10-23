@@ -4,6 +4,14 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
+POLICY_CALL_ROLE = "policy"
+AUX_EVENT_TYPE = "gateway_aux_inference"
+
+
+def aux_session_id(session_id: str, call_role: str) -> str:
+    """Landing session that holds one auxiliary role's calls for a policy session."""
+    return f"{session_id}:aux:{call_role}"
+
 
 @dataclass
 class GatewaySessionBinding:
@@ -32,6 +40,12 @@ class GatewaySessionBinding:
     llm_step_count_by_model: dict[str, int] = field(default_factory=dict)
     truncated_models: dict[str, str] = field(default_factory=dict)
     stop_response_sent_models: set[str] = field(default_factory=set)
+    aux_call_count_by_role: dict[str, int] = field(default_factory=dict)
+
+    def increment_aux_call_count(self, call_role: str) -> int:
+        next_count = self.aux_call_count_by_role.get(call_role, 0) + 1
+        self.aux_call_count_by_role[call_role] = next_count
+        return next_count
 
     def close(self, reason: str, closed_at: datetime) -> None:
         self.status = "closed"
@@ -97,6 +111,13 @@ class GatewayRequestContext:
     created_at: datetime
     llm_step_index: int | None = None
     synthetic_stop: bool = False
+    # "policy" calls form the session trajectory. Auxiliary roles (for example a
+    # benchmark judge) are audited but never consume the policy step budget.
+    call_role: str = POLICY_CALL_ROLE
+
+    @property
+    def is_auxiliary(self) -> bool:
+        return self.call_role != POLICY_CALL_ROLE
 
 
 @dataclass(frozen=True)
@@ -143,3 +164,5 @@ class GatewayTelemetryRecord:
     is_session_completed: bool = False
     truncate_reason: str | None = None
     synthetic_stop: bool = False
+    call_role: str = POLICY_CALL_ROLE
+    policy_session_id: str | None = None

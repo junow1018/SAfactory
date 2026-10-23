@@ -51,12 +51,21 @@ Gateway 默认将服务日志写入 `logs/gateway.log`。可以用 `SAFACTORY_GA
 | `POST /v1/responses` | 标准 OpenAI 兼容 responses 透传，不绑定 session。 |
 | `POST /v1/sessions/{session_id}/chat/completions` | Session 级 chat completions，是 agent runtime 主要使用的端点。 |
 | `POST /v1/sessions/{session_id}/responses` | Session 级 responses 端点。 |
+| `POST /v1/sessions/{session_id}/aux/{role}/chat/completions` | 归属于该 session 的辅助调用（如 benchmark judge），不进入该 session 的轨迹。 |
 | `GET /v1/sessions/{session_id}` | 查看 gateway session 状态。 |
 | `POST /v1/sessions/{session_id}/close` | 发起或轮询 session close；`closing` 响应包含 `Retry-After`。 |
 | `GET /v1/sessions/{session_id}/latest-success-step?model=...` | 返回该 session/model 已观测到的最大 HTTP 200 step ID。 |
 | `POST /v1/sessions/{session_id}/clean` | 幂等清理 closed session 的 Gateway 内存状态。 |
 
 Session 级请求会把轨迹行关联到 Safactory 的 `session_id`。
+
+辅助调用复用相同的路由、admission 和 telemetry，区别在于：
+
+- 不计入 `max_steps`，不会截断 session，也不改变 `latest-success-step`。
+- 记录以 `event_type: gateway_aux_inference` 写入 session ID `{session_id}:aux:{role}`，
+  evaluator 的 reward 目标和训练轨迹选择都不会选中它们；`env_id`、`meta_json.policy_session_id`
+  和 `meta_json.call_role` 用于关联回策略 session 以便审计。
+- `role` 须匹配 `[a-z][a-z0-9_-]{0,31}`。
 
 ## Route Key
 

@@ -329,7 +329,9 @@ class GatewayStorage:
             with trace.span("session_context.prepare", operation="in_memory"):
                 for binding, record in batch:
                     await self.get_or_create_session(binding, record.requested_model)
-                    environment = await self._resolve_session_environment(record.session_id)
+                    environment = await self._resolve_session_environment(
+                        record.policy_session_id or record.session_id
+                    )
                     dataset = environment.dataset if environment is not None else None
 
                     stored_messages: Any = _trajectory_messages(record)
@@ -462,6 +464,8 @@ class GatewayStorage:
             "is_session_completed": record.is_session_completed,
             "truncate_reason": record.truncate_reason if record.is_truncated else None,
             "synthetic_stop": record.synthetic_stop,
+            "call_role": record.call_role,
+            "policy_session_id": record.policy_session_id or record.session_id,
             "weight_version": _response_weight_version(record.response),
             "created_at": record.created_at.isoformat(),
             "completed_at": record.completed_at.isoformat(),

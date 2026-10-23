@@ -14,7 +14,13 @@ from typing import Any
 from core.perf_trace import PerfTrace
 from gateway.config import GatewayConfig
 from gateway.llm_router import LLMRouteTarget
-from gateway.models import GatewayRequestContext, GatewaySessionBinding, GatewayTelemetryRecord
+from gateway.models import (
+    AUX_EVENT_TYPE,
+    GatewayRequestContext,
+    GatewaySessionBinding,
+    GatewayTelemetryRecord,
+    aux_session_id,
+)
 from gateway.storage import GatewayStorage
 
 log = logging.getLogger("gateway.telemetry")
@@ -137,7 +143,7 @@ class TelemetryRecorder:
         response_text: str | None = None,
         status_code: int = 200,
     ) -> None:
-        await self._record_binding(binding, target, error=False)
+        await self._record_binding(binding, None if ctx.is_auxiliary else target, error=False)
         record = await self._build_record(
             ctx=ctx,
             binding=binding,
@@ -152,7 +158,7 @@ class TelemetryRecorder:
             response_text=response_text,
         )
         await self._enqueue(binding, record)
-        if record.status_code == 200:
+        if record.status_code == 200 and not ctx.is_auxiliary:
             async with self._lock:
                 key = (record.session_id, record.requested_model)
                 self._latest_success_step[key] = max(
@@ -175,7 +181,7 @@ class TelemetryRecorder:
         request_headers: dict[str, str] | None = None,
         response_text: str | None = None,
     ) -> None:
-        await self._record_binding(binding, target, error=True)
+        await self._record_binding(binding, None if ctx.is_auxiliary else target, error=True)
         record = await self._build_record(
             ctx=ctx,
             binding=binding,
@@ -208,7 +214,11 @@ class TelemetryRecorder:
     async def clear_session_cache(self, session_ids: list[str]) -> int:
         targets = set(session_ids)
         async with self._lock:
-            seq_keys = [key for key in self._seq_by_session_model if key[0] in targets]
+            seq_keys = [
+                key
+                for key in self._seq_by_session_model
+                if key[0] in targets or key[0].split(":aux:", 1)[0] in targets
+            ]
             latest_keys = [key for key in self._latest_success_step if key[0] in targets]
             truncated_keys = [key for key in self._truncated_sessions if key[0] in targets]
             for key in seq_keys:
@@ -387,7 +397,7 @@ class TelemetryRecorder:
             )
             return
 
-        queue = self._queue_for_session(record.session_id)
+        queue = self._queue_for_session(record.policy_session_id or record.session_id)
         if self._async_writes and self.cfg.telemetry_mode == "strict":
             await queue.put((binding, record))
             log.info(
@@ -571,7 +581,16 @@ class TelemetryRecorder:
         output_bytes = stream_stats.output_bytes if stream_stats else None
         client_cancelled = stream_stats.client_cancelled if stream_stats else False
         upstream_cancelled = stream_stats.upstream_cancelled if stream_stats else False
-        is_truncated = self.cfg.max_steps >= 0 and ctx.llm_step_index == self.cfg.max_steps
+        is_truncated = (
+            not ctx.is_auxiliary
+            and self.cfg.max_steps >= 0
+            and ctx.llm_step_index == self.cfg.max_steps
+        )
+        # Auxiliary calls keep their own Landing session and sequence so they can
+        # never be selected as the policy reward target or trajectory tail.
+        record_session_id = (
+            aux_session_id(ctx.session_id, ctx.call_role) if ctx.is_auxiliary else ctx.session_id
+        )
         if is_truncated:
             binding.mark_model_truncated(ctx.requested_model, "max_steps_reached", completed_at)
             await self._record_truncated_session(
@@ -581,10 +600,10 @@ class TelemetryRecorder:
             )
 
         return GatewayTelemetryRecord(
-            event_type="gateway_inference",
+            event_type=AUX_EVENT_TYPE if ctx.is_auxiliary else "gateway_inference",
             request_id=ctx.request_id,
-            session_id=ctx.session_id,
-            seq_id=await self._next_seq(ctx.session_id, ctx.requested_model),
+            session_id=record_session_id,
+            seq_id=await self._next_seq(record_session_id, ctx.requested_model),
             endpoint=ctx.endpoint,
             requested_model=ctx.requested_model,
             upstream_base_url=target.base_url if target else None,
@@ -635,6 +654,8 @@ class TelemetryRecorder:
             is_session_completed=is_truncated,
             truncate_reason="max_steps_reached" if is_truncated else None,
             synthetic_stop=ctx.synthetic_stop,
+            call_role=ctx.call_role,
+            policy_session_id=ctx.session_id,
         )
 
     def _should_capture_payload(self, failed: bool) -> bool:

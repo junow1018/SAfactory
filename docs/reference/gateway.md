@@ -51,12 +51,19 @@ With the default `base_session_path: /v1/sessions`, the gateway exposes:
 | `POST /v1/responses` | Standard OpenAI-compatible responses passthrough without session binding. |
 | `POST /v1/sessions/{session_id}/chat/completions` | Session-scoped chat completions. This is the main endpoint used by agent runtimes. |
 | `POST /v1/sessions/{session_id}/responses` | Session-scoped responses endpoint. |
+| `POST /v1/sessions/{session_id}/aux/{role}/chat/completions` | Auxiliary call (for example a benchmark judge) attributed to the session but kept out of its trajectory. |
 | `GET /v1/sessions/{session_id}` | Gateway session status. |
 | `POST /v1/sessions/{session_id}/close` | Start or poll session close. A `closing` response includes `Retry-After`. |
 | `GET /v1/sessions/{session_id}/latest-success-step?model=...` | Largest HTTP-200 step ID observed for the session and model. |
 | `POST /v1/sessions/{session_id}/clean` | Idempotently clear a closed session from Gateway memory. |
 
 Session-scoped requests are what make trajectory rows attach to a Safactory `session_id`.
+
+Auxiliary calls use the same routes, admission and telemetry, with these differences:
+
+- They do not count toward `max_steps`, cannot truncate the session and do not change `latest-success-step`.
+- Rows are written with `event_type: gateway_aux_inference` under the session ID `{session_id}:aux:{role}`, so evaluator reward targeting and training-trajectory selection never pick them up. `env_id`, `meta_json.policy_session_id` and `meta_json.call_role` link each row back to the policy session for audit.
+- `role` must match `[a-z][a-z0-9_-]{0,31}`.
 
 ## Route Keys
 

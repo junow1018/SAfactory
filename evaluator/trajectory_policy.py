@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterable, Optional
 
 
 NON_TRAJECTORY_EVENT_TYPES = {
+    "gateway_aux_inference",
     "gateway_session_close",
     "episode_summary",
     "evaluation_summary",

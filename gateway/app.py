@@ -22,7 +22,7 @@ from gateway.inference_forwarder import (
     StreamForwardContext,
 )
 from gateway.llm_router import LLMRouteTarget, LLMRouter
-from gateway.models import GatewayRequestContext, GatewaySessionBinding
+from gateway.models import POLICY_CALL_ROLE, GatewayRequestContext, GatewaySessionBinding
 from gateway.request_logger import GatewayRequestLogger
 from gateway.session_resolver import SessionResolver
 from gateway.storage import GatewayStorage
@@ -108,6 +108,7 @@ def create_app(cfg: GatewayConfig | None = None, storage: GatewayStorage | None 
         *,
         endpoint: str,
         path_session_id: str,
+        call_role: str = POLICY_CALL_ROLE,
     ) -> Response:
         started = time.perf_counter()
         payload: dict[str, Any] = {}
@@ -144,6 +145,7 @@ def create_app(cfg: GatewayConfig | None = None, storage: GatewayStorage | None 
                     payload,
                     endpoint=endpoint,
                     path_session_id=path_session_id,
+                    call_role=call_role,
                 )
             trace.update_context(
                 request_id=ctx.request_id,
@@ -507,6 +509,18 @@ def create_app(cfg: GatewayConfig | None = None, storage: GatewayStorage | None 
             path_session_id=session_id,
         )
 
+    async def handle_session_aux_chat_completions(
+        session_id: str,
+        call_role: str,
+        request: Request,
+    ) -> Response:
+        return await handle_inference_request(
+            request,
+            endpoint="chat/completions",
+            path_session_id=session_id,
+            call_role=call_role,
+        )
+
     async def handle_session_responses(session_id: str, request: Request) -> Response:
         return await handle_inference_request(
             request,
@@ -839,6 +853,11 @@ def create_app(cfg: GatewayConfig | None = None, storage: GatewayStorage | None 
     app.add_api_route(
         f"{session_root}/{{session_id}}/chat/completions",
         handle_session_chat_completions,
+        methods=["POST"],
+    )
+    app.add_api_route(
+        f"{session_root}/{{session_id}}/aux/{{call_role}}/chat/completions",
+        handle_session_aux_chat_completions,
         methods=["POST"],
     )
     app.add_api_route(

@@ -36,7 +36,7 @@ def build_gateway_step_row(
     return {
         "record_id": record_id,
         "session_id": record.session_id,
-        "env_id": record.session_id,
+        "env_id": record.policy_session_id or record.session_id,
         "step_id": record.seq_id,
         "env_name": binding.env_name or "gateway",
         "llm_model": record.requested_model,

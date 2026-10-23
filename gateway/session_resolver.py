@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from datetime import datetime, timezone
 from typing import Any
 
 from gateway.config import GatewayConfig
-from gateway.models import GatewayRequestContext, GatewaySessionBinding
+from gateway.models import POLICY_CALL_ROLE, GatewayRequestContext, GatewaySessionBinding
 
 log = logging.getLogger("gateway.session_resolver")
+
+_CALL_ROLE_PATTERN = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
 
 
 class SessionResolutionError(Exception):
@@ -34,9 +37,14 @@ class SessionResolver:
         *,
         endpoint: str,
         path_session_id: str,
+        call_role: str = POLICY_CALL_ROLE,
     ) -> GatewayRequestContext:
         if not path_session_id:
             raise SessionResolutionError("session_id must be supplied in the URL path")
+        if not _CALL_ROLE_PATTERN.fullmatch(call_role):
+            raise SessionResolutionError("call role must match [a-z][a-z0-9_-]{0,31}")
+        if ":aux:" in path_session_id:
+            raise SessionResolutionError("session_id must not contain ':aux:'")
 
         requested_model = payload.get("model")
         if not isinstance(requested_model, str) or not requested_model:
@@ -49,6 +57,7 @@ class SessionResolver:
             endpoint=endpoint,
             is_stream=bool(payload.get("stream", False)),
             created_at=_utcnow(),
+            call_role=call_role,
         )
 
     async def get_or_create_binding(self, ctx: GatewayRequestContext) -> GatewaySessionBinding:
@@ -59,7 +68,7 @@ class SessionResolver:
             if binding is None:
                 binding = GatewaySessionBinding(
                     session_id=ctx.session_id,
-                    model=ctx.requested_model,
+                    model="" if ctx.is_auxiliary else ctx.requested_model,
                     upstream_base_url=None,
                     status="active",
                     last_seen_at=now,
@@ -67,7 +76,8 @@ class SessionResolver:
                 )
                 self._bindings[ctx.session_id] = binding
             else:
-                binding.model = ctx.requested_model or binding.model
+                if not ctx.is_auxiliary:
+                    binding.model = ctx.requested_model or binding.model
                 binding.last_seen_at = now
         return binding
 
