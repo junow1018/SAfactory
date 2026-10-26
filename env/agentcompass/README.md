@@ -33,8 +33,10 @@
 | Benchmark ID | Source-proven result family | SAfactory normalization |
 | --- | --- | --- |
 | `browsecomp` | `LLMJudgeScorer` | native boolean `correct` → 10/0 |
+| `browsecomp_zh` | `LLMJudgeScorer`（与 browsecomp 相同的 evaluate） | native boolean `correct` → 10/0 |
 | `deepsearchqa` | `DeepSearchQAScorer` | native boolean `correct` → 10/0 |
 | `frontierscience` | olympiad judge or research rubric | olympiad 10/0; research native 0–10 total |
+| `gaia` | `LLMJudgeScorer`（仅 text 模态） | native boolean `correct` → 10/0 |
 | `hle` | `LLMJudgeScorer` | native boolean `correct` → 10/0 |
 | `hle_verified` | `LLMJudgeScorer` | native boolean `correct` → 10/0 |
 | `scicode` | SciCode evaluation | native subproblem fraction 0–1 → 0–10 |
@@ -42,6 +44,9 @@
 | `sgi_deep_research` | `LLMJudgeScorer` | native boolean `correct` → 10/0 |
 | `special_pattern_check` | analyzer-derived boolean `correct` | 10/0 |
 | `swebench_verified` | evaluator `completed`/`resolved` | native `resolved` → 10/0 |
+| `xbench_deepsearch` | exact-match 短路或 `xbench_llm_judge` | native boolean `correct` → 10/0 |
+
+其余 15 个 benchmark 尚无结果转换，runner 对其 fail closed。
 
 所有 detail 必须包含固定 revision 的顶层 `task_id` 和恰好一个 attempt。只有 `completed`、空
 `error` 且 benchmark-specific 字段一致的结果才能评分。未知 ID、alias、schema、冲突字段和
@@ -73,6 +78,7 @@ RJob runner 会在启动 AgentCompass benchmark 前验证结果路径和 `/app/r
 
 ```text
 registry.h.pjlab.org.cn/ailab-evobox-evobox_cpu/benches:agentcompass-02
+registry.h.pjlab.org.cn/ailab-evobox-evobox_cpu/benches@sha256:61e6f2b7c3e92d51981bcfd48b159964c5a40519c5d0c6b06166a2897ed324f2
 ```
 
 该镜像为 Linux/AMD64，使用 Python 3.12，并固定 AgentCompass commit：
@@ -81,11 +87,28 @@ registry.h.pjlab.org.cn/ailab-evobox-evobox_cpu/benches:agentcompass-02
 d2c3e148902e948db3270fa34b2198fb1b10beb7
 ```
 
+[Dockerfile.host-extras](Dockerfile.host-extras) 在其上叠加原生宿主侧代码路径所需依赖，不改
+revision、不升降级基础包：wget/unzip/git-lfs（原生 loader 调用）、`frontier-engineering`、
+`wildclawbench`、`taubench` extras、matplotlib（SciCode problem 80），以及按固定版本文档
+`--no-deps` 安装的 tau2 v1.0.1。已发布：
+
+```text
+registry.h.pjlab.org.cn/ailab-evobox-evobox_cpu/benches:agentcompass-d2c3e148-host-extras-01
+registry.h.pjlab.org.cn/ailab-evobox-evobox_cpu/benches@sha256:832a3ee0606e19c59360a6c9abbf63909d0d3dfc357f039e27eae01e5ac29d60
+```
+
+原生 `dependency_spec`（gdpval_ac、scicode、swebench_multilingual、swebench_verified、
+wildclawbench）在该镜像内全部通过。Agent CLI（openclaw/claude/codex/openhands）与 Docker
+不在此镜像内，属于原生 recipe 选择的各任务 sandbox 镜像。
+
 默认只允许 `host_process`。如需启用其他 environment，必须通过 `AGENTCOMPASS_ALLOWED_ENVIRONMENTS` 显式配置。
 
-主模型通过当前 episode 的 Gateway session 路由。下述 SciCode naive 组合没有独立 judge
-或辅助模型，每个子步骤均使用同一个 session URL 和原始 model ID。其他 benchmark 的 judge
-配置、调用归属与数据挂载尚需逐项核对；上面的评分归一化表不是可运行组合矩阵。
+主模型通过当前 episode 的 Gateway session 路由。需要 judge 的 benchmark 由数据行
+`benchmark_params.judge_model.id` 选择 judge 模型；runner 把它固定指向本 session 的
+`.../aux/judge` 路径（见 [Gateway](../../docs/reference/gateway_CN.md)，依赖公共 Gateway
+aux 改动），拒绝行内覆盖 `base_url`/`api_key`/协议。judge 调用不消耗策略步数、不成为
+reward 目标、不进入策略训练轨迹，但保留可关联的审计记录。搜索摘要、用户模拟器、embedding
+等其他辅助调用尚未接入，不按 judge 处理。上面的评分归一化表不是可运行组合矩阵。
 
 ## 标准开发和启动
 
@@ -171,83 +194,54 @@ python -B -m unittest discover -s tests/env/agentcompass -p 'test_*.py' -v
 
 ## 真实 benchmark 共享数据与批量运行
 
-运行入口仍是 `launcher.py`，复用现有 config/start 和 `runner.py`。`generate_dataset.py`
-只做部署准备或任务选择，不启动任务、不创建 session、不写数据库。其他 env 的对应机制：
-
-| 参考实现 | 复用机制 |
-| --- | --- |
-| Geo3K config 与公共 `load_yaml.py` | Launcher 读取宿主可见 dataset，逐行展开独立 episode/session |
-| OpenRT start/runner | 外部原始数据和 results 分别挂载；每个 runner 只执行一个原生任务 |
-| ExploitGym README/config | smoke/full 通过 dataset 切换，start 不变 |
-| PatchEval `generate_full_config.py` | 从真实原始记录选 ID 并生成任务清单；不复用其 CVE 格式 |
+运行入口仍是 `launcher.py`，复用现有 config/start 和 `runner.py`。
+[prepare_shared_data.py](prepare_shared_data.py) 是唯一的数据准备与任务选择工具：不启动
+任务、不创建 session、不写数据库，也不新增启动入口。
 
 每行保持一个原生 sample；`env_num: 1`，runner 强制 `sample_ids=[sample_id]`、`k=1`、
 原生 `task-concurrency=1`。SciCode 一个 sample 内可以有多个子步骤，共用一个 session；
 不能把整个 benchmark 放进一个 session，也不能把每个子步骤冒充独立 sample。
 
-完整的 10 个 benchmark 数据、评分资产、镜像依赖与齐备状态见
-[共享数据准备状态](DATA_READINESS.md)。当前发布的是 SciCode 官方原始/评分资产及 validation
-任务目录，运行组合为 `scicode + scicode_tool_use(mode=naive) + host_process + openai-chat`。
-其他 benchmark 的 schema 归一化不等于已经配置好数据、judge 或运行环境。
+28 个 benchmark 的数据、评分资产、依赖与运行状态见 [共享数据准备状态](DATA_READINESS.md)。
+数据已发布不代表该 benchmark 已可运行；运行支持范围以该文件的“运行支持”列为准。
 
 ### 部署者首次准备（集群内执行一次）
 
-部署者在有 GPFS 权限的环境创建独立版本目录，将它作为共享原始数据发布；不要放在某个
-session 的 results 或权限为 0700 的旧私有目录下。平台授权及目录访问权限由部署者统一配置，
-无需每位使用者下载、解压或整理 benchmark。
-
-```text
-<SHARED_ROOT>/scicode/problems_dev.jsonl
-<SHARED_ROOT>/scicode/problems_test.jsonl
-<SHARED_ROOT>/scicode/test_data.h5
-<SHARED_ROOT>/scicode/{固定 revision 的提示模板和预填代码}
-<SHARED_ROOT>/manifests/scicode-validation.jsonl
-<SHARED_ROOT>/manifests/scicode-validation.metadata.json
-```
-
-固定镜像为：
-
-```text
-registry.h.pjlab.org.cn/ailab-evobox-evobox_cpu/benches@sha256:61e6f2b7c3e92d51981bcfd48b159964c5a40519c5d0c6b06166a2897ed324f2
-```
-
-在该镜像内，将共享版本目录挂载为 `/app/data/agentcompass`，将准备脚本通过现有文件分发
-机制放入容器；已有官方 HDF5 另挂载为只读输入。执行同一个数据准备脚本：
+在固定镜像（下方 host-extras）内、共享数据根以读写方式挂载时执行，可多次执行：
 
 ```bash
-# 下面两个变量都是准备容器内的路径；AC_PREP_SCRIPT 指向仓库 generate_dataset.py 的副本。
-: "${AC_PREP_SCRIPT:?设置数据准备脚本的容器路径}"
-: "${EXISTING_OFFICIAL_H5:?设置已有官方 HDF5 的容器路径}"
-/opt/venv/bin/python -B "$AC_PREP_SCRIPT" --benchmark scicode --prepare \
-  --data-dir /app/data/agentcompass --reuse-h5 "$EXISTING_OFFICIAL_H5"
+/opt/venv/bin/python -B prepare_shared_data.py prepare \
+  --benchmark <id> [--benchmark <id> ...] --data-dir <SHARED_ROOT>
 ```
 
-准备过程核对固定源码、HDF5 官方大小/SHA256、338 个子题组及 1,082 个测试组，使用固定
-revision 的包内问题定义/模板，并调用原生 loader 生成目录与预算。没有现有 HDF5 时，部署者
-可以省略 `--reuse-h5`，由准备过程从固定源码指定的官方 ZIP 获取并严格校验；**使用者日常
-流程不会下载**。本轮已复用已有官方文件，没有重新下载整套 ZIP，也没有使用 fixture。
-
-准备操作有文件锁并在临时目录校验后发布。完整目录重复执行只复核和复用，不覆盖资产；
-已有目录不完整或版本不符则报错，需另选版本目录，不自动删除旧目录。新发布子目录为 0755、
-文件为 0644，旧私有原件与 results 保持不变。元数据记录所有资产和任务清单的 SHA256。
+- 每个 benchmark 从固定模块指定的来源获取**完整原生数据树**（含附件、图片、评分资产），
+  在临时目录中先用原生 loader 校验，再原子发布到原生 `data_dir` 位置。
+- `<SHARED_ROOT>/.published/<id>.json` 记录来源、实际获取的版本（模块未固定版本时记录本次
+  获取的 HF sha / git commit）、归档 SHA256 和每个文件的 SHA256；datasets/HF 留下的
+  `*.lock` 运行锁文件不计入资产。
+- 重复执行逐文件复核：内容变化、缺失或多出未记录文件都会报错，不覆盖、不修补；更新版本
+  须发布到新目录。`--reconcile` 只在已记录资产全部不变时，把记录后新增的文件补记、或删除
+  早期记录中误收的运行锁文件条目，并在记录的 `amendments` 中留痕。
+- 原生任务目录写入 `<SHARED_ROOT>/manifests/v2/`；更早版本的 `manifests/*.jsonl` 保留不动。
+  目录行只含数据与原生参数，不含 harness 或 judge 等运行配置。
+- SciCode 的官方 HDF5 首次获取与结构校验仍由 [generate_dataset.py](generate_dataset.py)
+  `--prepare` 完成；统一工具在其基础上接管、记录并生成 validation/test 目录。
+- skillsbench 与 special_pattern_check 在固定版本没有下载源，需部署方用 `--source <目录>`
+  提供原生格式数据，同样经原生 loader 校验后发布；`status` 子命令会给出所需目录结构。
+- 失败时输出结构化错误与 traceback 并以非零码退出；批量提交按 benchmark 汇总失败项。
+- 准备只在需要网络的部署环境（经集群代理）运行；使用者的 runner 关闭 HF 在线访问，
+  缺数据时直接失败，不会向共享目录下载。
 
 部署映射（`<USER>` 是部署所有者，具体值由部署者提供）：
 
 | Launcher 可见路径 | RJob 挂载源 | 容器路径及原生参数 |
 | --- | --- | --- |
-| `/mnt/shared-storage-user/<USER>/agentcompass-data/d2c3e148` | `gpfs://gpfs1/<USER>/agentcompass-data/d2c3e148` | `/app/data/agentcompass` → 行内 `data_dir`；`benchmark_params.h5py_file=/app/data/agentcompass/scicode/test_data.h5` |
+| `/mnt/shared-storage-user/<USER>/agentcompass-data/d2c3e148` | `gpfs://gpfs1/<USER>/agentcompass-data/d2c3e148` | `/app/data/agentcompass`（目录行的 `data_dir`；其中路径参数已指向该挂载） |
 | 现有 GPFS results 子目录，通过工作目录的 `./results` 可见 | 保留现有 results URI | `/app/results`；每个 job/session/task 的可写工作目录及结果 |
 
 在部署的私有全局 `rjob.mount_config` 中保留 results 项并增加 data 项。公共 per-agent start
-不设置该列表，避免覆盖全局挂载。大数据不进入 `embedded_files`；其现有 diagnostic 小文件
-不影响共享数据。Docker 部署在既有 start 的 `container` 下配置同样的 `mounts` target。
-SciCode 的 code workdir 和 evaluator workspace 由 runner 放到各 session 的 results，原始
-共享数据仅用于读取。
-
-部署者还应发布**现有标准 env 配置的无凭证部署副本**，只填固定镜像和共享 dataset 路径；
-本集群已经发布 `<SHARED_ROOT>/agentcompass_config.rjob.yaml`，默认指向 15 条 validation。
-它仍配合仓库的 `agentcompass_start.rjob.yaml` 使用。鉴权、模型路由和 storage 连接信息保留
-在私有配置，不放进共享任务清单或 Git。
+不设置该列表，避免覆盖全局挂载。runner 把原生工作区、HF/XDG 缓存及 SealQA 的 datasets
+缓存放到各 session 的 results 下，共享数据只读使用。
 
 ### 使用者日常运行（复用共享数据）
 
@@ -255,29 +249,28 @@ SciCode 的 code workdir 和 evaluator workspace 由 runner 放到各 session �
 Launcher 必须运行在能看到该共享存储的 worker 上，并具有项目代码、Launcher 依赖和私有环境
 文件；Gateway 主机与 Launcher worker 可以不同，但子 RJob 必须能访问 Gateway。工作目录的
 `./results` 必须是与子 RJob `/app/results` 相同的持久 source。日常操作只选择 benchmark、
-模型和任务范围，无需准备原生数据。
+harness、模型和任务范围，无需准备原生数据。
 
-使用整个 validation 时直接选择部署提供的标准 env 配置。选择子集时，用 Launcher 的普通
-Python 从已发布原生目录选 ID，例如选 `1`、`19`（最多分别一次、两次模型生成）：
+用 Launcher 的普通 Python 从已发布目录选任务（只读小型 JSONL，不需要 AgentCompass）：
 
 ```bash
 : "${LAUNCHER_PY:?设置 Launcher Python 路径}"
 : "${SHARED_ROOT:?设置部署者提供的共享版本目录绝对路径}"
 : "${TASK_MANIFEST:?设置本次任务清单输出路径，不能覆盖已有文件}"
-"$LAUNCHER_PY" -B env/agentcompass/generate_dataset.py --benchmark scicode \
-  --catalog "$SHARED_ROOT/manifests/scicode-validation.jsonl" \
+"$LAUNCHER_PY" -B env/agentcompass/prepare_shared_data.py select \
+  --catalog "$SHARED_ROOT/manifests/v2/scicode-validation.jsonl" \
+  --harness scicode_tool_use --harness-params '{"mode": "naive"}' \
   --sample-id 1 --sample-id 19 --output "$TASK_MANIFEST"
 ```
 
-也可用 `--limit N` 或 `--all` 替代 `--sample-id`。目录经过版本/校验和检查，ID 必须来自
-部署者调用原生 loader 生成的目录；未知 ID 会报错。此模式只处理小型任务 JSONL，不需要
-AgentCompass、HDF5 或模型依赖。脚本打印该选择对应的预算。
+需要 judge 的 benchmark 另加 `--judge-model <模型 ID>`（该模型须在 Gateway `llm_routes`
+中）。目录经版本/校验和检查；样本 ID 必须来自原生 loader 生成的目录，未知 ID 报错；
+`--limit N` 或 `--all` 可替代 `--sample-id`。
 
-按其他 env 的既有方式，在当前标准 env 配置的私有副本中只把 `dataset` 换成
-`TASK_MANIFEST` 的绝对路径；保持 `env_num: 1`、`dataset_load_mode: eager` 和固定镜像。
-这是任务范围选择，不是重新整理原始数据，也不需要新的 benchmark 专用 start/runner。
+在标准 env 配置的私有副本中只把 `dataset` 换成 `TASK_MANIFEST` 的绝对路径，并把
+`env_image` 换成 host-extras 镜像；保持 `env_num: 1`、`dataset_load_mode: eager`。
 
-下面是 `1`、`19` 两条的标准运行命令；它会提交 RJob、调用模型并写入部署指定的 test Landing：
+下面的标准运行命令会提交 RJob、调用模型并写入部署指定的 test Landing：
 
 ```bash
 : "${PRIVATE_ENV:?设置部署者提供的私有环境文件路径}"
@@ -308,7 +301,7 @@ export no_proxy="$NO_PROXY"
 对应 naive 模式的生成调用数，不限制 token；模型客户端及原生任务自动重试均为 0。
 
 默认整条 episode 超时 3600 秒、每个子步骤评测超时 1800 秒，沿用现有 start 的 2 CPU/4 GiB。
-包含 test sample `80` 时还缺 matplotlib，不能把当前 validation 准备状态宣称为全量可运行。
+SciCode test sample `80` 需要 matplotlib，仅 host-extras 镜像提供。
 
 原生 detail 与 Landing 中的模型请求/响应必须按准确 job/session/model 身份核对，再读取
 reward/step_reward。SciCode reward 为有效子题通过比例乘 10，可以为部分分；episode reward
