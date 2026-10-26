@@ -203,7 +203,8 @@ python -B -m unittest discover -s tests/env/agentcompass -p 'test_*.py' -v
 不能把整个 benchmark 放进一个 session，也不能把每个子步骤冒充独立 sample。
 
 28 个 benchmark 的数据、评分资产、依赖与运行状态见 [共享数据准备状态](DATA_READINESS.md)。
-数据已发布不代表该 benchmark 已可运行；运行支持范围以该文件的“运行支持”列为准。
+数据和 catalog 已发布不代表对应运行环境已就绪，也不代表 benchmark 已验收；代码接入、
+运行依赖和真实验收分别以该文件对应列为准。
 
 ### 部署者首次准备（集群内执行一次）
 
@@ -232,20 +233,23 @@ python -B -m unittest discover -s tests/env/agentcompass -p 'test_*.py' -v
 - 准备只在需要网络的部署环境（经集群代理）运行；使用者的 runner 关闭 HF 在线访问，
   缺数据时直接失败，不会向共享目录下载。
 
-部署映射（`<USER>` 是部署所有者，具体值由部署者提供）：
+部署映射。`<DATA_OWNER>` 是**发布共享数据的 fileset 所有者**，由部署者告知；使用者必须
+挂载这份已发布的数据，不能把它换成自己的用户名（那会指向不存在的目录）。results 是每个
+使用者自己的可写目录，与数据源相互独立：
 
-| Launcher 可见路径 | RJob 挂载源 | 容器路径及原生参数 |
-| --- | --- | --- |
-| `/mnt/shared-storage-user/<USER>/agentcompass-data/d2c3e148` | `gpfs://gpfs1/<USER>/agentcompass-data/d2c3e148` | `/app/data/agentcompass`（目录行的 `data_dir`；其中路径参数已指向该挂载） |
-| 现有 GPFS results 子目录，通过工作目录的 `./results` 可见 | 保留现有 results URI | `/app/results`；每个 job/session/task 的可写工作目录及结果 |
+| 用途 | Launcher 可见路径 | RJob 挂载源 | 容器路径 |
+| --- | --- | --- | --- |
+| 共享数据（只读使用） | `/mnt/shared-storage-user/<DATA_OWNER>/agentcompass-data/d2c3e148` | `gpfs://gpfs1/<DATA_OWNER>/agentcompass-data/d2c3e148` | `/app/data/agentcompass`（目录行 `data_dir`，路径参数已指向该挂载） |
+| 个人 results（可写） | Launcher 工作目录下的 `./results` | 使用者自己的 results URI | `/app/results` |
 
-在部署的私有全局 `rjob.mount_config` 中保留 results 项并增加 data 项。公共 per-agent start
+在私有全局 `rjob.mount_config` 中同时列出这两项。公共 per-agent start
 不设置该列表，避免覆盖全局挂载。runner 把原生工作区、HF/XDG 缓存及 SealQA 的 datasets
 缓存放到各 session 的 results 下，共享数据只读使用。
 
 ### 使用者日常运行（复用共享数据）
 
-使用者取得 GPFS fileset 权限后，由部署者提供 `SHARED_ROOT`、标准配置和私有连接配置。
+使用者取得共享数据 fileset 的读权限后，由部署者提供 `SHARED_ROOT`（即上表共享数据的
+Launcher 可见路径）、标准配置和私有连接配置。
 Launcher 必须运行在能看到该共享存储的 worker 上，并具有项目代码、Launcher 依赖和私有环境
 文件；Gateway 主机与 Launcher worker 可以不同，但子 RJob 必须能访问 Gateway。工作目录的
 `./results` 必须是与子 RJob `/app/results` 相同的持久 source。日常操作只选择 benchmark、

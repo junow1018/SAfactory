@@ -1191,7 +1191,7 @@ class RunnerTests(unittest.TestCase):
             .replace("Dockerfile.host-extras", "")
             .replace(OFFICIAL_SCICODE_URL, "")
             .replace("scicode.zip", "")
-            .replace("/mnt/shared-storage-user/<USER>/", "")
+            .replace("/mnt/shared-storage-user/<DATA_OWNER>/", "")
             .replace("host.docker.internal", "")
         )
         self.assertNotIn("/var/run/docker.sock", combined)

@@ -3,9 +3,10 @@
 固定原生版本 `d2c3e148902e948db3270fa34b2198fb1b10beb7`，共 28 个 benchmark。四类状态分别统计，
 任一项完成不代替其他项：
 
-- **数据**：完整原生数据树已发布到共享挂载，`.published/<id>.json` 逐文件校验通过（内容、缺失、
+- **数据**（仅指数据和 catalog）：完整原生数据树已发布到共享挂载，`.published/<id>.json` 逐文件校验通过（内容、缺失、
   未记录文件均检查），原生 loader 生成的目录在 `manifests/v2/`。
-- **adapter**：runner 能为该组合构造原生命令并把原生结果转换为 SAfactory reward。
+- **代码接入**：runner 已实现该组合的原生命令构造、数据检查和结果转换（离线测试覆盖）；
+  不表示已在真实环境跑通。
 - **依赖**：宿主侧依赖在 host-extras 镜像就绪（原生 `dependency_spec` 通过）；sandbox、外部
   服务、凭据另列。
 - **真实验收**：在当前 v2 基线上以标准 Launcher 跑通最小真实任务，并回查原生结果、Landing
@@ -17,39 +18,40 @@
 
 ## 状态表
 
-| Benchmark | 数据 | 原生任务数（catalog） | adapter | 运行依赖 | 真实验收（v2） |
+| Benchmark | 数据 | 原生任务数（catalog） | 代码接入 | 运行依赖 | 真实验收（v2） |
 | --- | --- | --- | --- | --- | --- |
 | scicode | 完整 | validation 15 / test 65 | ✅ scicode_tool_use naive | 就绪（host-extras 含 matplotlib） | ✅ validation 1、19 |
-| special_pattern_check | 需部署方提供原生数据（`--source`） | — | ✅ | 就绪 | ❌（仅旧基线单条） |
-| sealqa | 完整（HF `267b8197`） | seal_0 111 / seal_hard 254 / longseal 254 | ✅ | longseal+openai_chat 就绪；seal_0/hard 需搜索凭据 | ❌ |
-| browsecomp | 完整 | 1266 | ✅ | 需搜索凭据 | ❌ |
-| browsecomp_zh | 完整 | 289 | ✅ | 需搜索凭据 | ❌ |
-| deepsearchqa | 完整 | 900 | ✅ | 需搜索凭据 | ❌ |
-| frontierscience | 完整 | 160 | ✅ | 需搜索凭据 | ❌ |
-| sgi_deep_research | 完整 | 318 | ✅ | 需搜索凭据 | ❌ |
-| hle | 完整（含图片） | llm 500 / multimodal 2500 | ✅ 仅 llm | 需搜索凭据；multimodal 需 VL judge | ❌ |
-| gaia | 完整（含附件） | llm 103 / multimodal 165 | ✅ 仅 llm | 需搜索凭据 | ❌ |
-| hle_verified | 完整（HF `0bc83643` 获取时快照） | llm 2158 / multimodal 2500 | 仅结果转换；runner 未接数据路径 | 需搜索凭据 | ❌ |
-| xbench_deepsearch | 完整（GitHub `17c56219`） | 2505 100 / 2510 100 | 仅结果转换；runner 未接数据路径 | 需搜索凭据 | ❌ |
-| deepresearch_bench | 完整（GitHub `main` 获取时 commit） | 100 | ❌ | 需搜索凭据；FACT 需 Jina | ❌ |
-| screenspot | 完整（含图片） | 1272 | ❌ | 需 VL 策略模型 | ❌ |
-| swebench_verified | 完整 | 500 | 仅结果转换 | 需 sandbox 或宿主 conda | ❌ |
-| swebench_multilingual | 完整（HF 获取时快照） | 300 | ❌ | 需 sandbox | ❌ |
-| swebench_pro | 完整（HF 快照 + run_scripts commit） | 642 | ❌ | 需 sandbox | ❌ |
-| deepswe | 完整（固定 SHA） | 113 | ❌ | 需 sandbox | ❌ |
-| terminal_bench_2 | 完整（git 获取时 commit） | 89 | ❌ | 需 sandbox | ❌ |
-| terminal_bench_2_1 | 完整（原生 harbor download） | 89 | ❌ | 需 sandbox | ❌ |
-| terminal_bench_2_verified | 完整（HF git+LFS） | 89 | ❌ | 需 sandbox | ❌ |
-| skillsbench | 需部署方提供原生数据（`--source`） | — | ❌ | 需 Docker | ❌ |
-| wildclawbench | 完整（MD5 固定，15.4 GB） | 60 | ❌ | 需 Docker、BRAVE 密钥 | ❌ |
-| pinchbench | 完整（tag v1.1.0） | 23 | ❌ | 需 sandbox | ❌ |
-| gdpval_ac | 完整（HF 获取时快照 + baseline） | 220 | ❌ | 需 sandbox、judge harness | ❌ |
-| researchclawbench | 完整（GitHub `main` 获取时 commit） | 40 | ❌ | 需搜索/MinerU 凭据、多模态 judge | ❌ |
-| frontier_engineering | 完整（固定 SHA + 外部资产） | v1 48 / non_gpu 44 / filtered 38 / lite 10 | ❌ | openevolve 就绪；部分任务需 GPU/Docker | ❌ |
-| taubench | 完整（MD5 固定） | 375 | ❌ | tau2 就绪；需用户模拟器/judge/embedding 路由 | ❌ |
+| special_pattern_check | 需部署方提供原生数据（`--source`） | — | ✅ | 就绪 | ❌ 未验收（旧基线曾跑通单条 diagnostic） |
+| sealqa | 完整（HF `267b8197`） | seal_0 111 / seal_hard 254 / longseal 254 | ✅ | longseal+openai_chat 就绪；seal_0/hard 需搜索凭据 | ❌ 未验收 |
+| browsecomp | 完整 | 1266 | ✅ | 需搜索凭据 | ❌ 未验收 |
+| browsecomp_zh | 完整 | 289 | ✅ | 需搜索凭据 | ❌ 未验收 |
+| deepsearchqa | 完整 | 900 | ✅ | 需搜索凭据 | ❌ 未验收 |
+| frontierscience | 完整 | 160 | ✅ | 需搜索凭据 | ❌ 未验收 |
+| sgi_deep_research | 完整 | 318 | ✅ | 需搜索凭据 | ❌ 未验收 |
+| hle | 完整（含图片） | llm 500 / multimodal 2500 | ✅ 仅 llm | 需搜索凭据；multimodal 需 VL judge | ❌ 未验收 |
+| gaia | 完整（含附件） | llm 103 / multimodal 165 | ✅ 仅 llm | 需搜索凭据 | ❌ 未验收 |
+| hle_verified | 完整（HF `0bc83643` 获取时快照） | llm 2158 / multimodal 2500 | 仅结果转换；runner 未接数据路径 | 需搜索凭据 | ❌ 未验收 |
+| xbench_deepsearch | 完整（GitHub `17c56219`） | 2505 100 / 2510 100 | 仅结果转换；runner 未接数据路径 | 需搜索凭据 | ❌ 未验收 |
+| deepresearch_bench | 完整（GitHub `main` 获取时 commit） | 100 | ❌ | 需搜索凭据；FACT 需 Jina | ❌ 未验收 |
+| screenspot | 完整（含图片） | 1272 | ❌ | 需 VL 策略模型 | ❌ 未验收 |
+| swebench_verified | 完整 | 500 | 仅结果转换 | 需 sandbox 或宿主 conda | ❌ 未验收 |
+| swebench_multilingual | 完整（HF 获取时快照） | 300 | ❌ | 需 sandbox | ❌ 未验收 |
+| swebench_pro | 完整（HF 快照 + run_scripts commit） | 642 | ❌ | 需 sandbox | ❌ 未验收 |
+| deepswe | 完整（固定 SHA） | 113 | ❌ | 需 sandbox | ❌ 未验收 |
+| terminal_bench_2 | 完整（git 获取时 commit） | 89 | ❌ | 需 sandbox | ❌ 未验收 |
+| terminal_bench_2_1 | 完整（原生 harbor download） | 89 | ❌ | 需 sandbox | ❌ 未验收 |
+| terminal_bench_2_verified | 完整（HF git+LFS） | 89 | ❌ | 需 sandbox | ❌ 未验收 |
+| skillsbench | 需部署方提供原生数据（`--source`） | — | ❌ | 需 Docker | ❌ 未验收 |
+| wildclawbench | 完整（MD5 固定，15.4 GB） | 60 | ❌ | 需 Docker、BRAVE 密钥 | ❌ 未验收 |
+| pinchbench | 完整（tag v1.1.0） | 23 | ❌ | 需 sandbox | ❌ 未验收 |
+| gdpval_ac | 完整（HF 获取时快照 + baseline） | 220 | ❌ | 需 sandbox、judge harness | ❌ 未验收 |
+| researchclawbench | 完整（GitHub `main` 获取时 commit） | 40 | ❌ | 需搜索/MinerU 凭据、多模态 judge | ❌ 未验收 |
+| frontier_engineering | 完整（固定 SHA + 外部资产） | v1 48 / non_gpu 44 / filtered 38 / lite 10 | ❌ | openevolve 就绪；部分任务需 GPU/Docker | ❌ 未验收 |
+| taubench | 完整（MD5 固定） | 375 | ❌ | tau2 就绪；需用户模拟器/judge/embedding 路由 | ❌ 未验收 |
 
-合计：数据完整 26、需部署方提供数据 2；adapter 可端到端运行 10、仅结果转换 3（hle_verified、xbench_deepsearch、swebench_verified）、未接入 15；
-v2 真实验收 1（SciCode）。
+合计：数据和 catalog 已准备 26、需部署方提供数据 2；代码已接入 10、仅结果转换 3
+（hle_verified、xbench_deepsearch、swebench_verified）、未接入 15；v2 真实验收仅 SciCode，
+其余 27 个均未验收。数据准备完成不代表运行依赖就绪或 benchmark 验收通过。
 
 ## 资产说明
 
